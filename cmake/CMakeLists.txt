@@ -19,7 +19,8 @@ if(POLICY CMP0135)
 endif()
 
 ########################################
-
+set(CMAKE_CXX_STANDARD 17)
+add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 project(lammps CXX)
 set(SOVERSION 0)
 get_property(BUILD_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -43,6 +44,14 @@ set(LAMMPS_THIRDPARTY_URL "${LAMMPS_DOWNLOADS_URL}/thirdparty")
 mark_as_advanced(LAMMPS_DOWNLOADS_URL)
 
 find_package(Git)
+find_package(Torch REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+if(EIGEN3_FOUND)
+    include_directories(${EIGEN3_INCLUDE_DIR})
+else()
+    message(FATAL_ERROR "Eigen3 not found!")
+endif()
 
 # by default, install into $HOME/.local (not /usr/local), so that no root access (and sudo!!) is needed
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
@@ -145,7 +154,6 @@ if(MSVC)
     add_compile_options(/Zc:__cplusplus)
     add_compile_options(/wd4244)
     add_compile_options(/wd4267)
-    add_compile_options(/wd4250)
     add_compile_options(/EHsc)
   endif()
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
@@ -205,13 +213,22 @@ if(BUILD_SHARED_LIBS AND (CMAKE_SYSTEM_NAME STREQUAL "Windows") AND CMAKE_CROSSC
 endif()
 
 add_executable(lmp ${MAIN_SOURCES})
-target_link_libraries(lmp PRIVATE lammps)
+message(STATUS "TORCH_INCLUDE_DIRS = ${TORCH_INCLUDE_DIRS}")
+set(DEEPMD_INCLUDE_PATH "" CACHE PATH "Path to DeePMD include files")
+include_directories(${DEEPMD_INCLUDE_PATH} ${TORCH_INCLUDE_DIRS})
+target_link_directories(lmp PRIVATE ${TORCH_LIBRARY_DIRS})
+set(DEEPMD_LIB_PATH "" CACHE PATH "Path to DeePMD library libdeepmd_cc.so")
+target_link_directories(lmp PRIVATE ${DEEPMD_LIB_PATH})
+message(STATUS "TORCH_LIBRARIES = ${TORCH_LIBRARIES}")
+target_link_libraries(lmp PUBLIC lammps ${TORCH_LIBRARIES} deepmd_cc)
+#target_link_libraries(lmp PRIVATE deepmd_cc)
 set_target_properties(lmp PROPERTIES OUTPUT_NAME ${LAMMPS_BINARY})
 install(TARGETS lmp EXPORT LAMMPS_Targets DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 option(CMAKE_VERBOSE_MAKEFILE "Generate verbose Makefiles" OFF)
 
 set(STANDARD_PACKAGES
+  DEEPMD
   ADIOS
   AMOEBA
   ASPHERE
@@ -269,6 +286,7 @@ set(STANDARD_PACKAGES
   MOFFF
   MOLECULE
   MOLFILE
+  MPIIO
   NETCDF
   ORIENT
   PERI
@@ -306,7 +324,7 @@ endforeach()
 ######################################################
 # packages with special compiler needs or external libs
 ######################################################
-target_include_directories(lammps PUBLIC $<BUILD_INTERFACE:${LAMMPS_SOURCE_DIR}>)
+target_include_directories(lammps PUBLIC $<BUILD_INTERFACE:${LAMMPS_SOURCE_DIR}> ${TORCH_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
 
 if(PKG_ADIOS)
   # The search for ADIOS2 must come before MPI because
@@ -377,6 +395,7 @@ endif()
 # "hard" dependencies between packages resulting
 # in an error instead of skipping over files
 pkg_depends(ML-IAP ML-SNAP)
+pkg_depends(MPIIO MPI)
 pkg_depends(ATC MANYBODY)
 pkg_depends(LATBOLTZ MPI)
 pkg_depends(SCAFACOS MPI)
@@ -387,7 +406,6 @@ pkg_depends(CG-DNA MOLECULE)
 pkg_depends(CG-DNA ASPHERE)
 pkg_depends(ELECTRODE KSPACE)
 pkg_depends(EXTRA-MOLECULE MOLECULE)
-pkg_depends(MESONT MOLECULE)
 
 # detect if we may enable OpenMP support by default
 set(BUILD_OMP_DEFAULT OFF)
@@ -577,6 +595,13 @@ foreach(PKG ${STANDARD_PACKAGES})
   endif()
 
   RegisterPackages(${${PKG}_SOURCES_DIR})
+endforeach()
+
+# packages that need defines set
+foreach(PKG MPIIO)
+  if(PKG_${PKG})
+    target_compile_definitions(lammps PRIVATE -DLMP_${PKG})
+  endif()
 endforeach()
 
 # dedicated check for entire contents of accelerator packages
